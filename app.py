@@ -1,8 +1,14 @@
 import streamlit as st
 import plotly.graph_objects as go
 import datetime
+import logging
+from typing import Optional, Tuple
 from data_engine import MarketDataFetcher
 from nlp_engine import TextSentimentAnalyzer
+from config import Config
+from exceptions import InvalidAPIKeyError, DataFetchError, LLMAPIError
+
+logger = logging.getLogger(__name__)
 
 st.set_page_config(page_title="A股量化与舆情智能分析系统", layout="wide", page_icon="📈")
 
@@ -17,7 +23,13 @@ class FinancialDashboardApp:
     def __init__(self):
         self.analyzer = TextSentimentAnalyzer()
 
-    def render_sidebar(self, price_df=None):
+    def render_sidebar(self, price_df=None) -> Tuple[str, str, bool]:
+        """
+        渲染左侧控制面板
+        
+        Returns:
+            (stock_code, start_date_str, submit_btn_clicked)
+        """
         st.sidebar.header("🛠️ 系统控制面板")
         st.sidebar.markdown("---")
         
@@ -31,12 +43,19 @@ class FinancialDashboardApp:
         
         st.sidebar.markdown("---")
         st.sidebar.subheader("🧠 接入 Agent 大脑")
-        api_key = st.sidebar.text_input(
-            "🔑 DeepSeek API Key (选填)", 
-            type="password", 
-            help="用于驱动 AI 智能投研助手生成报告。没有Key也可正常使用看板。"
-        )
-        st.session_state.api_key = api_key
+        
+        # API Key 输入（优先级：环保境变量 > 用户输入）
+        env_api_key = Config.DEEPSEEK_API_KEY
+        if env_api_key:
+            st.sidebar.success("✅ 已从环境变量加载 API Key")
+            st.session_state.api_key = env_api_key
+        else:
+            api_key = st.sidebar.text_input(
+                "🔑 DeepSeek API Key (选填)", 
+                type="password", 
+                help="获取地址: https://platform.deepseek.com\n不填时AI对话功能不可用，但看板可正常使用。"
+            )
+            st.session_state.api_key = api_key
         
         if price_df is not None and not price_df.empty:
             st.sidebar.markdown("---")
@@ -64,29 +83,38 @@ class FinancialDashboardApp:
 
                     if len(st.session_state.messages) == 0:
                         if st.button("✨ 一键注入今日大盘数据，生成基础研报", type="primary"):
-                            # 【修复点3：增加数据空值保护，防止 IndexError 崩溃】
-                            if not price_df.empty:
-                                latest_price = price_df['Close'].iloc[-1]
-                                ma_status = "均线金叉多头排列" if price_df['MA5'].iloc[-1] > price_df['MA20'].iloc[-1] else "均线死叉空头排列"
-                                # 兼容性保护：确保含有 MACD_Hist 列
-                                macd_status = "MACD红柱多头" if ('MACD_Hist' in price_df and price_df['MACD_Hist'].iloc[-1] > 0) else "MACD绿柱空头"
-                                
-                                from llm_agent import FinancialAgent
-                                agent = FinancialAgent(api_key=st.session_state.api_key)
-                                
-                                init_prompt = agent.generate_initial_prompt(st.session_state.stock_code, latest_price, ma_status, macd_status, news_list)
-                                st.session_state.messages.append({"role": "user", "content": "帮我看看今天这只票的情况。"})
-                                st.chat_message("user").write("帮我看看今天这只票的情况。")
-                                
-                                with st.chat_message("assistant", avatar="🤖"):
-                                    hidden_messages = [{"role": "user", "content": init_prompt}]
-                                    stream = agent.stream_chat(hidden_messages)
-                                    response = st.write_stream(stream)
+                            try:
+                                if not price_df.empty:
+                                    latest_price = price_df['Close'].iloc[-1]
+                                    ma_status = "均线金叉多头排列" if price_df['MA5'].iloc[-1] > price_df['MA20'].iloc[-1] else "均线死叉空头排列"
+                                    macd_status = "MACD红柱多头" if ('MACD_Hist' in price_df and price_df['MACD_Hist'].iloc[-1] > 0) else "MACD绿柱空头"
                                     
-                                st.session_state.messages.append({"role": "assistant", "content": response})
-                                st.rerun()
-                            else:
-                                st.error("❌ 数据加载失败，无法生成研报。请检查股票代码。")
+                                    from llm_agent import FinancialAgent
+                                    agent = FinancialAgent(api_key=st.session_state.api_key)
+                                    
+                                    init_prompt = agent.generate_initial_prompt(st.session_state.stock_code, latest_price, ma_status, macd_status, news_list)
+                                    st.session_state.messages.append({"role": "user", "content": "帮我看看今天这只票的情况。"})
+                                    st.chat_message("user").write("帮我看看今天这只票的情况。")
+                                    
+                                    with st.chat_message("assistant", avatar="🤖"):
+                                        hidden_messages = [{"role": "user", "content": init_prompt}]
+                                        stream = agent.stream_chat(hidden_messages)
+                                        response = st.write_stream(stream)
+                                        
+                                    st.session_state.messages.append({"role": "assistant", "content": response})
+                                    st.rerun()
+                                else:
+                                    st.error("❌ 数据加载失败，无法生成研报。请检查股票代码。")
+                                    logger.error(f"数据为空，无法生成研报")
+                            except InvalidAPIKeyError as e:
+                                st.error(f"❌ API Key 配置错误: {str(e)}")
+                                logger.error(f"API Key 错误: {e}")
+                            except LLMAPIError as e:
+                                st.error(f"❌ AI对话异常: {str(e)}")
+                                logger.error(f"LLM 错误: {e}")
+                            except Exception as e:
+                                st.error(f"❌ 意外错误: {str(e)}")
+                                logger.error(f"未知错误: {e}")
 
                     if len(st.session_state.messages) > 0:
                         if prompt := st.chat_input("您可以继续追问，例如：‘如果明晚发布利空财报，会跌破防守位吗？’"):
