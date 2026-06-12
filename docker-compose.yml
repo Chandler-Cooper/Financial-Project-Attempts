@@ -1,0 +1,190 @@
+# ============================================================================
+# A股量化与舆情智能分析系统 - Docker Compose 配置
+# ============================================================================
+# 用法：
+#   启动: docker-compose up -d
+#   停止: docker-compose down
+#   查看日志: docker-compose logs -f
+#   重启: docker-compose restart
+# ============================================================================
+
+version: '3.8'
+
+services:
+  # ========================================================================
+  # 主应用服务
+  # ========================================================================
+  fin-analysis:
+    # 镜像构建
+    build:
+      context: .
+      dockerfile: Dockerfile
+    
+    # 容器名称
+    container_name: fin-analysis-app
+    
+    # 端口映射 (本地:容器)
+    ports:
+      - "8501:8501"
+    
+    # 环境变量
+    environment:
+      # Streamlit 配置
+      STREAMLIT_SERVER_HEADLESS: "true"
+      STREAMLIT_LOGGER_LEVEL: "warning"
+      
+      # API Key 配置（从主机环境变量继承）
+      # 启动时设置: export DEEPSEEK_API_KEY="sk-xxx"
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      
+      # Python 配置
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      
+      # 时区设置
+      TZ: "Asia/Shanghai"
+    
+    # 卷挂载（数据持久化）
+    volumes:
+      # 日志目录
+      - ./logs:/app/logs:rw
+      
+      # 缓存目录（可选）
+      - ./.streamlit:/app/.streamlit:rw
+      
+      # 数据目录（可选）
+      - ./data:/app/data:rw
+    
+    # 重启策略
+    restart: unless-stopped
+    
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    # 日志配置
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # 网络
+    networks:
+      - fin-network
+    
+    # 资源限制（可选，根据服务器配置调整）
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '1'
+    #       memory: 2G
+    #     reservations:
+    #       cpus: '0.5'
+    #       memory: 1G
+    
+    # 依赖关系（暂无外部服务）
+    # depends_on:
+    #   - redis
+    #   - postgres
+
+  # ========================================================================
+  # Redis 缓存服务（可选，用于未来的分布式缓存）
+  # ========================================================================
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: fin-analysis-redis
+  #   ports:
+  #     - "6379:6379"
+  #   volumes:
+  #     - redis-data:/data
+  #   networks:
+  #     - fin-network
+  #   restart: unless-stopped
+  #   command: redis-server --appendonly yes
+
+  # ========================================================================
+  # PostgreSQL 数据库（可选，用于未来的数据持久化）
+  # ========================================================================
+  # postgres:
+  #   image: postgres:15-alpine
+  #   container_name: fin-analysis-db
+  #   environment:
+  #     POSTGRES_USER: fin_user
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fin_password}
+  #     POSTGRES_DB: fin_analysis
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - postgres-data:/var/lib/postgresql/data
+  #   networks:
+  #     - fin-network
+  #   restart: unless-stopped
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U fin_user"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+
+# ============================================================================
+# 网络定义
+# ============================================================================
+networks:
+  fin-network:
+    driver: bridge
+
+# ============================================================================
+# 卷定义（用于数据持久化）
+# ============================================================================
+volumes:
+  # redis-data:
+  #   driver: local
+  # postgres-data:
+  #   driver: local
+
+# ============================================================================
+# 快速命令参考
+# ============================================================================
+# 
+# 1. 首次启动（构建+运行）：
+#    docker-compose up -d
+#
+# 2. 查看日志（实时）：
+#    docker-compose logs -f fin-analysis
+#
+# 3. 进入容器 Shell：
+#    docker-compose exec fin-analysis bash
+#
+# 4. 查看容器状态：
+#    docker-compose ps
+#
+# 5. 停止服务：
+#    docker-compose stop
+#
+# 6. 删除容器和网络（保留卷数据）：
+#    docker-compose down
+#
+# 7. 完全清理（包括卷数据）：
+#    docker-compose down -v
+#
+# 8. 重启服务：
+#    docker-compose restart
+#
+# 9. 重新构建镜像：
+#    docker-compose build --no-cache
+#
+# 10. 查看特定容器的详细信息：
+#     docker-compose ps -a
+#
+# 11. 设置 API Key 后启动：
+#     export DEEPSEEK_API_KEY="sk-xxx"
+#     docker-compose up -d
+#
+# 12. 查看容器资源使用情况：
+#     docker stats
+#
+# ============================================================================
